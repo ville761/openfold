@@ -40,7 +40,6 @@ from openfold.utils.tensor_utils import (
 
 from scripts.utils import add_data_args
 
-
 def main(args):
     config = model_config(args.model_name)
     model = AlphaFold(config)
@@ -169,7 +168,8 @@ def main(args):
             device_no = args.model_device.split(":")[-1]
             os.environ["CUDA_VISIBLE_DEVICES"] = device_no
         relaxed_pdb_str, _, _ = amber_relaxer.process(prot=unrelaxed_protein)
-        os.environ["CUDA_VISIBLE_DEVICES"] = visible_devices
+        if visible_devices:
+            os.environ["CUDA_VISIBLE_DEVICES"] = visible_devices
         logging.info(f"Relaxation time: {time.perf_counter() - t}")
         
         # Save the relaxed PDB.
