@@ -21,18 +21,17 @@ if [ "$option" = "m" ]; then
 		shift; shift;
 	fi
 fi
-echo $1
 
 if [ $# -lt 1 ]; then
 	usage
 fi
 
 fasta=$1
-suffix=${fasta##*.}
-
-if [ "$suffix" != "fasta" ]; then
-	usage
-fi
+#suffix=${fasta##*.}
+#
+#if [[ "$suffix" != "fasta" && "$suffix" != "seq" ]] ; then
+#	usage
+#fi
 
 aligndir=$PWD/alignment_dir
 scriptdir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
@@ -55,6 +54,9 @@ do
 	fi
 done <"$fasta"
 
+# remove special characters
+sed -i $'s/[^[:print:]\t]//g' ${tmpfasta}
+
 names=()
 while IFS= read -r line
 do
@@ -75,11 +77,21 @@ python my_precompute_alignments_mmseqs.py ${tmpfasta}  \
     --env_db colabfold_envdb_202108_db \
     --pdb70 $PWD/data/pdb70/pdb70
 
-## fix character encoding (is probably done in mmseqs2.py)
+## fix character encoding
 for name in ${names[@]}
 do
-	sed -i 's/\x0//g' ${aligndir}/${name}/bfd.mgnify30.metaeuk30.smag30.a3m
-	sed -i 's/\x0//g' ${aligndir}/${name}/uniref.a3m
+	adir=$aligndir/$name
+	if [[ -d "${adir}" ]]
+	then
+		#sed -i 's|\x0/|g' $adir/bfd.mgnify30.metaeuk30.smag30.a3m
+		#sed -i 's|\x0/|g' $adir/uniref.a3m
+		sed -i 's/\x0//g' $adir/bfd.mgnify30.metaeuk30.smag30.a3m
+		sed -i 's/\x0//g' $adir/uniref.a3m
+		#cat $adir/bfd.mgnify30.metaeuk30.smag30.a3m | tr -d '\000' > $adir/bfd.mgnify30.metaeuk30.smag30.a3m
+		#cat $adir/uniref.a3m | tr -d '\000' > $adir/uniref.a3m
+		#ex -s +"%s/\%x00//g" -cwq $adir/bfd.mgnify30.metaeuk30.smag30.a3m
+		#ex -s +"%s/\%x00//g" -cwq $adir/uniref.a3m
+	fi
 done
 
 echo "Running inference on the sequence(s) using DeepMind's pretrained parameters..."
