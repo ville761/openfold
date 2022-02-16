@@ -5,9 +5,23 @@
 outputdir=$PWD
 
 function usage {
-	echo Usage: $0 input.fasta
+	echo Usage: $0 [-m {1-5}] input.fasta
+	echo "where the option sets the AlphaFold model to be used (default: 1)"
 	exit 1
 }
+
+model=1 # use the first model by default
+
+getopts "m:" option
+if [ "$option" = "m" ]; then
+	model=${OPTARG}
+	if [ ${OPTIND} -eq 2 ]; then
+		shift
+	else
+		shift; shift;
+	fi
+fi
+echo $1
 
 if [ $# -lt 1 ]; then
 	usage
@@ -87,6 +101,7 @@ python run_pretrained_openfold.py \
 	--pdb70_database_path /data/db/pdb70/pdb70 \
 	--uniclust30_database_path /data/db/uniclust30/uniclust30_2018_08/uniclust30_2018_08 \
 	--output_dir ${outputdir} \
+	--model_name model_${model} \
 	--use_precomputed_alignments ${aligndir}/
 
 source scripts/deactivate_conda_env.sh
