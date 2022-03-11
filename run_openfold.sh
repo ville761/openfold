@@ -2,69 +2,101 @@
 
 # this script precomputes the protein alignments and then runs OpenFold
 
-outputdir=$PWD
-
 function usage {
-	echo Usage: $0 [-m {1-5}] input.fasta
-	echo "where the option sets the AlphaFold model to be used (default: 1)"
+	echo Usage: $0 [-p prefix] [-m {1-5}] input.fasta
+	echo "where the option -m sets the AlphaFold model to be used (default: 1)."
+	echo "If the input file is not given, it's read from the stdin. Then it's best to give the prefix."
+	echo "The prefix may contain a path to an output directory (e.g.. output/path/prefix)."
+	exit 1
+}
+
+function exit_abnormal() {
+	usage
 	exit 1
 }
 
 model=1 # use the first model by default
+defaultprefix="prefix"
+prefix=$defaultprefix
 
-getopts "m:" option
-if [ "$option" = "m" ]; then
-	model=${OPTARG}
-	if [ ${OPTIND} -eq 2 ]; then
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+	while getopts ":p:m:" option; do
+		case "${option}" in
+			p)
+				prefix=${OPTARG}
+				;;
+			m)
+				model=${OPTARG}
+				;;
+			:)
+				echo "Error: -${OPTARG} requires an argument."
+				exit_abnormal
+				;;
+			*)
+				exit_abnormal
+				;;
+		esac
+	done
+	shift $((OPTIND-1))
+	while [ $# -gt 0 ] && ! [[ "$1" =~ ^- ]]; do
+		fasta=$1
 		shift
-	else
-		shift; shift;
-	fi
+	done
+done
+
+if [ "$1" == "--" ]; then
+  shift
+  fasta=$1
 fi
 
-if [ $# -lt 1 ]; then
-	usage
-fi
-
-fasta=$1
-#suffix=${fasta##*.}
-#
-#if [[ "$suffix" != "fasta" && "$suffix" != "seq" ]] ; then
-#	usage
-#fi
-
-aligndir=$PWD/alignment_dir
 scriptdir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
+aligndir=$PWD/alignment_dir
 if [ ! -d ${aligndir} ] && [ ! -h ${aligndir} ]
 then
-	mkdir ${aligndir}
+	mkdir -p ${aligndir}
 fi
+
+# read the sequence from the given file or stdin
+# also read the prefix from the file if not given on the command line
 
 tmpfasta=${aligndir}/tmp.fasta
 rm ${tmpfasta} 2> /dev/null
 touch ${tmpfasta}
 while IFS= read -r line
-do
+do 
 	if [[ $line = \>* ]]
 	then
-		cut -d\| -f1 <<< $line >> ${tmpfasta}
+		if [ "$prefix" = "$defaultprefix" ]; then
+			prefix="${line#*>}"
+			prefix="${prefix%%[^a-zA-Z0-9_]*}"
+		fi
 	else
-		echo $line >> ${tmpfasta}
+		echo -n $line >> ${tmpfasta}
 	fi
-done <"$fasta"
+done < "${fasta:-/dev/stdin}"
+echo "" >> ${tmpfasta}
 
 # remove special characters
 sed -i $'s/[^[:print:]\t]//g' ${tmpfasta}
 
-names=()
-while IFS= read -r line
-do
-	if [[ $line = \>* ]]
-	then
-		names+=( $( echo "$line" | cut -c 2-) ) 
-	fi
-done <"${tmpfasta}"
+# check if the prefix includes a path (if given on the command line)
+# if it doesn't include an absolute path, put the output directory in the current directory
+if [[ "$prefix" =~ .*"/".* ]]; then
+	  outputdir=$prefix
+	  prefix=$( basename $prefix )
+	  [[ $outputdir != /* ]] && outputdir=$PWD/$outputdir
+else
+	  outputdir=$PWD/$prefix
+fi
+
+# append the prefix to the fasta file
+echo -e ">${prefix}\n$(cat ${tmpfasta})" > ${tmpfasta}
+
+if [ ! -d ${outputdir} ] && [ ! -h ${outputdir} ]
+then
+	mkdir -p ${outputdir}
+fi
 
 cd ${scriptdir}
 source scripts/activate_conda_env.sh
@@ -77,34 +109,19 @@ python my_precompute_alignments_mmseqs.py ${tmpfasta}  \
     --env_db colabfold_envdb_202108_db \
     --pdb70 $PWD/data/pdb70/pdb70
 
-## fix character encoding
-for name in ${names[@]}
-do
-	adir=$aligndir/$name
-	if [[ -d "${adir}" ]]
-	then
-		#sed -i 's|\x0/|g' $adir/bfd.mgnify30.metaeuk30.smag30.a3m
-		#sed -i 's|\x0/|g' $adir/uniref.a3m
-		sed -i 's/\x0//g' $adir/bfd.mgnify30.metaeuk30.smag30.a3m
-		sed -i 's/\x0//g' $adir/uniref.a3m
-		#cat $adir/bfd.mgnify30.metaeuk30.smag30.a3m | tr -d '\000' > $adir/bfd.mgnify30.metaeuk30.smag30.a3m
-		#cat $adir/uniref.a3m | tr -d '\000' > $adir/uniref.a3m
-		#ex -s +"%s/\%x00//g" -cwq $adir/bfd.mgnify30.metaeuk30.smag30.a3m
-		#ex -s +"%s/\%x00//g" -cwq $adir/uniref.a3m
-	fi
-done
+# fix character encoding
+adir=$aligndir/$prefix
+if [ -d "${adir}" ]
+then
+	sed -i 's/\x0//g' $adir/bfd.mgnify30.metaeuk30.smag30.a3m
+	sed -i 's/\x0//g' $adir/uniref.a3m
+	#cat $adir/bfd.mgnify30.metaeuk30.smag30.a3m | tr -d '\000' > $adir/bfd.mgnify30.metaeuk30.smag30.a3m
+	#cat $adir/uniref.a3m | tr -d '\000' > $adir/uniref.a3m
+	#ex -s +"%s/\%x00//g" -cwq $adir/bfd.mgnify30.metaeuk30.smag30.a3m
+	#ex -s +"%s/\%x00//g" -cwq $adir/uniref.a3m
+fi
 
 echo "Running inference on the sequence(s) using DeepMind's pretrained parameters..."
-#python run_pretrained_openfold.py \
-#	${tmpfasta} \
-#	/data/db/uniref90/uniref90.fasta \
-#	/data/db/mgnify/mgy_clusters_2018_12.fa \
-#	/data/db/pdb70/pdb70 \
-#	/data/db/pdb_mmcif/mmcif_files/ \
-#	/data/db/uniclust30/uniclust30_2018_08/uniclust30_2018_08 \
-#	--output_dir ${outputdir} \
-#	--use_precomputed_alignments ${aligndir}/
-# for the new version
 python run_pretrained_openfold.py \
 	${tmpfasta} \
 	/data/db/pdb_mmcif/mmcif_files/ \
@@ -117,3 +134,7 @@ python run_pretrained_openfold.py \
 	--use_precomputed_alignments ${aligndir}/
 
 source scripts/deactivate_conda_env.sh
+
+# zip the output
+cd $outputdir/..
+tar zcvf $prefix.tar.gz $prefix
