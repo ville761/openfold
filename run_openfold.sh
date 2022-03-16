@@ -60,6 +60,13 @@ fi
 # read the sequence from the given file or stdin
 # also read the prefix from the file if not given on the command line
 
+# check that the sequence if given either in stdin or as a file
+if [ "$fasta" = "" ] && [ -t 0 ] 
+then
+	echo "no sequence given" 
+	exit_abnormal
+fi
+
 tmpfasta=${aligndir}/tmp.fasta
 rm ${tmpfasta} 2> /dev/null
 touch ${tmpfasta}
