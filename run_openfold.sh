@@ -51,20 +51,25 @@ fi
 
 scriptdir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-aligndir=$PWD/alignment_dir
+# check if the prefix includes a path (if given on the command line)
+# if it doesn't include an absolute path, put the output directory in the current directory
+if [[ "$prefix" =~ .*"/".* ]]; then
+	  outputdir=$prefix
+	  prefix=$( basename $prefix )
+	  [[ $outputdir != /* ]] && outputdir=$PWD/$outputdir
+else
+	  outputdir=$PWD/$prefix
+fi
+
+if [ ! -d ${outputdir} ] && [ ! -h ${outputdir} ]
+then
+	mkdir -p ${outputdir}
+fi
+
+aligndir=${outputdir}/msa
 if [ ! -d ${aligndir} ] && [ ! -h ${aligndir} ]
 then
 	mkdir -p ${aligndir}
-fi
-
-# read the sequence from the given file or stdin
-# also read the prefix from the file if not given on the command line
-
-# check that the sequence if given either in stdin or as a file
-if [ "$fasta" = "" ] && [ -t 0 ] 
-then
-	echo "no sequence given" 
-	exit_abnormal
 fi
 
 tmpfasta=${aligndir}/tmp.fasta
@@ -84,26 +89,22 @@ do
 done < "${fasta:-/dev/stdin}"
 echo "" >> ${tmpfasta}
 
-# remove special characters
-sed -i $'s/[^[:print:]\t]//g' ${tmpfasta}
-
-# check if the prefix includes a path (if given on the command line)
-# if it doesn't include an absolute path, put the output directory in the current directory
-if [[ "$prefix" =~ .*"/".* ]]; then
-	  outputdir=$prefix
-	  prefix=$( basename $prefix )
-	  [[ $outputdir != /* ]] && outputdir=$PWD/$outputdir
-else
-	  outputdir=$PWD/$prefix
-fi
 
 # append the prefix to the fasta file
 echo -e ">${prefix}\n$(cat ${tmpfasta})" > ${tmpfasta}
 
-if [ ! -d ${outputdir} ] && [ ! -h ${outputdir} ]
+# read the sequence from the given file or stdin
+# also read the prefix from the file if not given on the command line
+
+# check that the sequence if given either in stdin or as a file
+if [ "$fasta" = "" ] && [ -t 0 ] 
 then
-	mkdir -p ${outputdir}
+	echo "no sequence given" 
+	exit_abnormal
 fi
+
+# remove special characters
+sed -i $'s/[^[:print:]\t]//g' ${tmpfasta}
 
 cd ${scriptdir}
 source scripts/activate_conda_env.sh
