@@ -27,12 +27,13 @@ from openfold.data.data_modules import (
 from openfold.model.model import AlphaFold
 from openfold.model.torchscript import script_preset_
 from openfold.np import residue_constants
+from openfold.utils.argparse import remove_arguments
 from openfold.utils.callbacks import (
     EarlyStoppingVerbose,
 )
 from openfold.utils.exponential_moving_average import ExponentialMovingAverage
-from openfold.utils.argparse import remove_arguments
 from openfold.utils.loss import AlphaFoldLoss, lddt_ca, compute_drmsd
+from openfold.utils.lr_schedulers import AlphaFoldLRScheduler
 from openfold.utils.seed import seed_everything
 from openfold.utils.superimposition import superimpose
 from openfold.utils.tensor_utils import tensor_tree_map
@@ -58,10 +59,39 @@ class OpenFoldWrapper(pl.LightningModule):
         )
         
         self.cached_weights = None
-        self.last_lr_step = 0
 
     def forward(self, batch):
         return self.model(batch)
+
+    def _log(self, loss_breakdown, batch, outputs, train=True):
+        phase = "train" if train else "val"
+        for loss_name, indiv_loss in loss_breakdown.items():
+            self.log(
+                f"{phase}/{loss_name}", 
+                indiv_loss, 
+                on_step=train, on_epoch=(not train), logger=True,
+            )
+
+            if(train):
+                self.log(
+                    f"{phase}/{loss_name}_epoch",
+                    indiv_loss,
+                    on_step=False, on_epoch=True, logger=True,
+                )
+
+        with torch.no_grad():
+            other_metrics = self._compute_validation_metrics(
+                batch, 
+                outputs,
+                superimposition_metrics=(not train)
+            )
+
+        for k,v in other_metrics.items():
+            self.log(
+                f"{phase}/{k}", 
+                v, 
+                on_step=False, on_epoch=True, logger=True
+            )
 
     def training_step(self, batch, batch_idx):
         if(self.ema.device != batch["aatype"].device):
@@ -79,44 +109,21 @@ class OpenFoldWrapper(pl.LightningModule):
         )
 
         # Log it
-        self.log(
-            "train/loss", 
-            loss, 
-            on_step=True, logger=True,
-        )
-        self.log(
-            "train/loss_epoch", 
-            loss, 
-            on_step=False, on_epoch=True, logger=True,
-        )
-        for loss_name, indiv_loss in loss_breakdown.items():
-            self.log(
-                f"train/{loss_name}", 
-                indiv_loss, 
-                on_step=True, logger=True,
-            )
-
-        with torch.no_grad():
-            other_metrics = self.compute_validation_metrics(batch, outputs) 
-
-        for k,v in other_metrics.items():
-            self.log(f"train/{k}", v, on_step=False, on_epoch=True, logger=True)
+        self._log(loss_breakdown, batch, outputs)
 
         return loss
 
     def on_before_zero_grad(self, *args, **kwargs):
         self.ema.update(self.model)
 
-#    def training_step_end(self, outputs):
-#        # Temporary measure to address DeepSpeed scheduler bug
-#        if(self.trainer.global_step != self.last_lr_step):
-#            self.lr_schedulers().step()
-#            self.last_lr_step = self.trainer.global_step
-
     def validation_step(self, batch, batch_idx):
         # At the start of validation, load the EMA weights
         if(self.cached_weights is None):
-            self.cached_weights = self.model.state_dict()
+            # model.state_dict() contains references to model weights rather
+            # than copies. Therefore, we need to clone them before calling 
+            # load_state_dict().
+            clone_param = lambda t: t.detach().clone()
+            self.cached_weights = tensor_tree_map(clone_param, self.model.state_dict())
             self.model.load_state_dict(self.ema.state_dict()["params"])
        
         # Run the model
@@ -125,29 +132,18 @@ class OpenFoldWrapper(pl.LightningModule):
 
         # Compute loss and other metrics
         batch["use_clamped_fape"] = 0.
-        loss, loss_breakdown = self.loss(
+        _, loss_breakdown = self.loss(
             outputs, batch, _return_breakdown=True
         )
-        self.log("val/loss", loss, on_step=False, on_epoch=True, logger=True)
-        for loss_name, indiv_loss in loss_breakdown.items():
-            self.log(
-                f"val/{loss_name}", 
-                indiv_loss, 
-                on_step=False, on_epoch=True, logger=True,
-            )
 
-        other_metrics = self.compute_validation_metrics(
-            batch, outputs, superimposition_metrics=True,
-        ) 
-        for k,v in other_metrics.items():
-            self.log(f"val/{k}", v, on_step=False, on_epoch=True, logger=True)
-
+        self._log(loss_breakdown, batch, outputs, train=False)
+        
     def validation_epoch_end(self, _):
         # Restore the model weights to normal
         self.model.load_state_dict(self.cached_weights)
         self.cached_weights = None
 
-    def compute_validation_metrics(self, 
+    def _compute_validation_metrics(self, 
         batch, 
         outputs, 
         superimposition_metrics=False
@@ -173,15 +169,15 @@ class OpenFoldWrapper(pl.LightningModule):
             eps=self.config.globals.eps,
             per_residue=False,
         )
-    
+   
         metrics["lddt_ca"] = lddt_ca_score
-    
+   
         drmsd_ca_score = compute_drmsd(
             pred_coords_masked_ca,
             gt_coords_masked_ca,
-            mask=all_atom_mask_ca,
+            mask=all_atom_mask_ca, # still required here to compute n
         )
-    
+   
         metrics["drmsd_ca"] = drmsd_ca_score
     
         if(superimposition_metrics):
@@ -196,7 +192,7 @@ class OpenFoldWrapper(pl.LightningModule):
             )
 
             metrics["gdt_ts"] = gdt_ts_score
-            metrics["gdt_ta"] = gdt_ha_score
+            metrics["gdt_ha"] = gdt_ha_score
     
         return metrics
 
@@ -205,11 +201,23 @@ class OpenFoldWrapper(pl.LightningModule):
         eps: float = 1e-5,
     ) -> torch.optim.Adam:
         # Ignored as long as a DeepSpeed optimizer is configured
-        return torch.optim.Adam(
+        optimizer = torch.optim.Adam(
             self.model.parameters(), 
             lr=learning_rate, 
             eps=eps
         )
+        lr_scheduler = AlphaFoldLRScheduler(
+            optimizer,
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": lr_scheduler,
+                "interval": "step",
+                "name": "AlphaFoldLRScheduler",
+            }
+        }
 
     def on_load_checkpoint(self, checkpoint):
         self.ema.load_state_dict(checkpoint["ema"])
@@ -223,7 +231,7 @@ def main(args):
         seed_everything(args.seed) 
 
     config = model_config(
-        "initial_training", 
+        args.config_preset, 
         train=True, 
         low_prec=(args.precision == "16")
     ) 
@@ -234,7 +242,7 @@ def main(args):
         sd = {k[len("module."):]:v for k,v in sd.items()}
         model_module.load_state_dict(sd)
         logging.info("Successfully loaded model weights...")
-
+ 
     # TorchScript components of the model
     if(args.script_modules):
         script_preset_(model_module)
@@ -253,6 +261,8 @@ def main(args):
     if(args.checkpoint_every_epoch):
         mc = ModelCheckpoint(
             every_n_epochs=1,
+            auto_insert_metric_name=False,
+            save_top_k=-1,
         )
         callbacks.append(mc)
 
@@ -440,18 +450,23 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--wandb", action="store_true", default=False,
+        help="Whether to log metrics to Weights & Biases"
     )
     parser.add_argument(
         "--experiment_name", type=str, default=None,
+        help="Name of the current experiment. Used for wandb logging"
     )
     parser.add_argument(
         "--wandb_id", type=str, default=None,
+        help="ID of a previous run to be resumed"
     )
     parser.add_argument(
         "--wandb_project", type=str, default=None,
+        help="Name of the wandb project to which this run will belong"
     )
     parser.add_argument(
         "--wandb_entity", type=str, default=None,
+        help="wandb username or team name to which runs are attributed"
     )
     parser.add_argument(
         "--script_modules", type=bool_type, default=False,
@@ -465,12 +480,27 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--train_epoch_len", type=int, default=10000,
-    )
-    parser.add_argument(
-        "--_alignment_index_path", type=str, default=None,
+        help=(
+            "The virtual length of each training epoch. Stochastic filtering "
+            "of training data means that training datasets have no "
+            "well-defined length. This virtual length affects frequency of "
+            "validation & checkpointing (by default, one of each per epoch)."
+        )
     )
     parser.add_argument(
         "--log_lr", action="store_true", default=False,
+        help="Whether to log the actual learning rate"
+    )
+    parser.add_argument(
+        "--config_preset", type=str, default="initial_training",
+        help=(
+            'Config setting. Choose e.g. "initial_training", "finetuning", '
+            '"model_1", etc. By default, the actual values in the config are '
+            'used.'
+        )
+    )
+    parser.add_argument(
+        "--_alignment_index_path", type=str, default=None,
     )
     parser = pl.Trainer.add_argparse_args(parser)
    

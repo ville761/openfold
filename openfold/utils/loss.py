@@ -1531,7 +1531,7 @@ def compute_drmsd(structure_1, structure_2, mask=None):
     drmsd = drmsd ** 2
     drmsd = torch.sum(drmsd, dim=(-1, -2))
     n = d1.shape[-1] if mask is None else torch.sum(mask, dim=-1)
-    drmsd = drmsd * (1 / (n * (n - 1)))
+    drmsd = drmsd * (1 / (n * (n - 1))) if n > 1 else (drmsd * 0.)
     drmsd = torch.sqrt(drmsd)
 
     return drmsd
@@ -1626,6 +1626,8 @@ class AlphaFoldLoss(nn.Module):
         seq_len = torch.mean(batch["seq_length"].float())
         crop_len = batch["aatype"].shape[-1]
         cum_loss = cum_loss * torch.sqrt(min(seq_len, crop_len))
+
+        losses["loss"] = cum_loss.detach().clone()
 
         if(not _return_breakdown):
             return cum_loss
