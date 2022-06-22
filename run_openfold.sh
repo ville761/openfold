@@ -179,7 +179,7 @@ do
     cmd="$cmd --mgnify_database_path /data/db/mgnify/mgy_clusters_2018_12.fa"
     cmd="$cmd --pdb70_database_path /data/db/pdb70/pdb70"
     cmd="$cmd --uniclust30_database_path /data/db/uniclust30/uniclust30_2018_08/uniclust30_2018_08"
-    cmd="$cmd --model_device ${device}$"
+    cmd="$cmd --model_device ${device}"
     if [ $save_outputs = "true" ]; then
         cmd="$cmd --save_outputs"
     fi
