@@ -149,7 +149,7 @@ cd ${scriptdir}
 source scripts/activate_conda_env.sh
 
 echo "Precomputing protein alignments..."
-python my_precompute_alignments_mmseqs.py ${fasta}  \
+python scripts/precompute_alignments_mmseqs_api.py ${fasta}  \
 	    uniref30_2103_db \
 	    ${aligndir}/ \
     --hhsearch_binary_path /usr/bin/hhsearch \
