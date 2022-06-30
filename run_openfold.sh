@@ -5,8 +5,8 @@
 shopt -s extglob
 
 function usage {
-	echo "Usage: $0 [-o output] [-m {1-5}] [-t mtype] [-d device] [-r] input.fasta"
-	echo "where the option -m sets the AlphaFold model to be used (default: 1). It can be a range, such as 1-5."
+	echo "Usage: $0 [-o output] [-m {1-5}] [-t mtype] [-d device] [-b db_dir] [-r] input.fasta"
+	echo "where the option -m sets the AlphaFold models to be used (default: model 1). It can be a range, such as 1-5."
     echo "There are 5 models, so the model numbers should in the range 1-5."
     echo ""
     echo "The option -t sets the model type ('monomer' (default) or 'pTM', multimer models are currently not"
@@ -37,11 +37,13 @@ function needs_arg() {
 }
 
 # default options
-model=1 # use the first model by default
+models=1 # use the first model by default
 mtype="monomer" # default AlphaFold model type
 modelrange="1-5"
 save_outputs="false"
 device="cpu"
+db_dir="/data/alphafold/db"
+hhsearch="/usr/bin/hhsearch"
 
 while getopts "hrd:p:m:t:-:" OPT; do
     if [ "$OPT" = "-" ]; then
@@ -52,9 +54,11 @@ while getopts "hrd:p:m:t:-:" OPT; do
     case "$OPT" in
         o | output) needs_arg; output="$OPTARG" ;;
         p | prefix) needs_arg; output="$OPTARG" ;; # for compatibility with an older version
-        m | model) needs_arg; model="$OPTARG" ;;
+        m | models) needs_arg; models="$OPTARG" ;;
         t | model_type) needs_arg; mtype="$OPTARG" ;;
         d | device) needs_arg; device="$OPTARG" ;;
+        b | data) needs_arg; db_dir="$OPTARG" ;;
+        e | hhsearch) needs_arg; hhsearch="$OPTARG" ;;
         s | save_outputs) save_outputs="true" ;;
         h | help) usage; exit 2 ;;
     esac
@@ -75,12 +79,13 @@ if [ "${mtype,,}" != "ptm" ] && [ "${mtype,,}" != "monomer" ]; then
 fi
 
 # check if the option -m includes a range of models or just one model number
-if [[ "$model" == @([$modelrange])-@([$modelrange]) ]]; then
-    model0=${model%%-+([0-9])}
-    model1=${model##+([0-9])-}
-elif [[ "$model" == @([$modelrange]) ]]; then
-    model0=$model
-    model1=$model
+if [[ "$models" == @([$modelrange])-@([$modelrange]) ]]; then
+    model0=${models%%-+([0-9])}
+    model1=${models##+([0-9])-}
+elif [[ "$models" == @([$modelrange]) ]]; then
+    echo option 2
+    model0=$models
+    model1=$models
 else
     exit_abnormal
 fi
@@ -152,9 +157,9 @@ echo "Precomputing protein alignments..."
 python scripts/precompute_alignments_mmseqs_api.py ${fasta}  \
 	    uniref30_2103_db \
 	    ${aligndir}/ \
-    --hhsearch_binary_path /usr/bin/hhsearch \
+    --hhsearch_binary_path ${hhsearch} \
     --env_db colabfold_envdb_202108_db \
-    --pdb70 $PWD/data/pdb70/pdb70
+    --pdb70 ${db_dir}/pdb70/pdb70
 
 # fix character encoding
 adir=$aligndir/$prefix
@@ -176,15 +181,16 @@ do
     else
         model="$modelnumber"
     fi
-    #cmd="python run_pretrained_openfold_all_ptm_with_plots.py ${tmpfasta} /data/db/pdb_mmcif/mmcif_files/"
-    cmd="python run_pretrained_openfold.py ${tmpfasta} /data/db/pdb_mmcif/mmcif_files/"
+    echo Calculating model: $model
+    #cmd="python run_pretrained_openfold_all_ptm_with_plots.py ${tmpfasta} ${db_dir}/pdb_mmcif/mmcif_files/"
+    cmd="python run_pretrained_openfold.py ${tmpfasta} ${db_dir}/pdb_mmcif/mmcif_files/"
     cmd="$cmd --use_precomputed_alignments ${aligndir}/"
     cmd="$cmd --output_dir ${outputdir}"
     cmd="$cmd --model_name model_${model}"
-    cmd="$cmd --uniref90_database_path /data/db/uniref90/uniref90.fasta"
-    cmd="$cmd --mgnify_database_path /data/db/mgnify/mgy_clusters_2018_12.fa"
-    cmd="$cmd --pdb70_database_path /data/db/pdb70/pdb70"
-    cmd="$cmd --uniclust30_database_path /data/db/uniclust30/uniclust30_2018_08/uniclust30_2018_08"
+    cmd="$cmd --uniref90_database_path ${db_dir}/uniref90/uniref90.fasta"
+    cmd="$cmd --mgnify_database_path ${db_dir}/mgnify/mgy_clusters_2018_12.fa"
+    cmd="$cmd --pdb70_database_path ${db_dir}/pdb70/pdb70"
+    cmd="$cmd --uniclust30_database_path ${db_dir}/uniclust30/uniclust30_2018_08/uniclust30_2018_08"
     cmd="$cmd --model_device ${device}"
     if [ $save_outputs = "true" ]; then
         cmd="$cmd --save_outputs"
