@@ -173,12 +173,10 @@ def main(args):
                 features=batch,
                 result=out,
                 b_factors=plddt_b_factors
-            )
-            unrelaxed_proteins[model_name] = unrelaxed_protein
 
-            # Save the model outputs.
-            result_output_path = os.path.join(args.output_dir,
-                                              f'result_{tag}_{model_name}.pkl')
+            result_output_path = os.path.join(
+                args.output_dir, f'result_{tag}_{model_name}.pkl'
+            )
             with open(result_output_path, 'wb') as f:
                 pickle.dump(out, f, protocol=4)
 
