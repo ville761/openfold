@@ -42,7 +42,7 @@ mtype="monomer" # default AlphaFold model type
 modelrange="1-5"
 save_outputs="false"
 device="cpu"
-db_dir="/data/alphafold/db"
+db_dir="/data/db"
 hhsearch="/usr/bin/hhsearch"
 
 while getopts "hrd:p:m:t:-:" OPT; do
@@ -59,7 +59,7 @@ while getopts "hrd:p:m:t:-:" OPT; do
         d | device) needs_arg; device="$OPTARG" ;;
         b | data) needs_arg; db_dir="$OPTARG" ;;
         e | hhsearch) needs_arg; hhsearch="$OPTARG" ;;
-        s | save_outputs) save_outputs="true" ;;
+        s | save_output) save_output="true" ;;
         h | help) usage; exit 2 ;;
     esac
 done
@@ -127,6 +127,7 @@ tmpfasta=${fastadir}/tmp.fasta
 mkdir -p ${fastadir}
 rm ${tmpfasta} 2> /dev/null
 touch ${tmpfasta}
+lseq=0
 while IFS= read -r line || [ -n "$line" ]
 do 
     if [[ $line = \>* ]]
@@ -138,10 +139,12 @@ do
         prefix=${line#*>}
     else
 	    echo -n $line >> ${tmpfasta}
+        lseq=$((lseq + $(echo -n $line | wc -c))) 
     fi
 done < "${fasta:-/dev/stdin}"
 #done < /dev/stdin
 echo "" >> ${tmpfasta}
+echo Lseq: ${lseq}
 
 # append the prefix to the fasta file
 #echo -e ">${prefix}\n$(cat ${tmpfasta})" > ${tmpfasta}
@@ -192,10 +195,12 @@ do
     cmd="$cmd --pdb70_database_path ${db_dir}/pdb70/pdb70"
     cmd="$cmd --uniclust30_database_path ${db_dir}/uniclust30/uniclust30_2018_08/uniclust30_2018_08"
     cmd="$cmd --model_device ${device}"
-    if [ $save_outputs = "true" ]; then
-        cmd="$cmd --save_outputs"
+    if [ $save_output = "true" ]; then
+        cmd="$cmd --save_outputs true"
     fi
     results=$($cmd)
+    echo python mkplots.py --model_name $model --lseq ${lseq} ${outputdir}/${prefix}_model_${model}_output_dict.pkl
+    python mkplots.py --model_name $model --lseq ${lseq} ${outputdir}/${prefix}_model_${model}_output_dict.pkl
 done
 
 source scripts/deactivate_conda_env.sh
